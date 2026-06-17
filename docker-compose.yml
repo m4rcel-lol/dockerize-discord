@@ -1,0 +1,9 @@
+services:
+  dockerize:
+    build: .
+    container_name: dockerize-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
