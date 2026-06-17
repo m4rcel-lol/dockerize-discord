@@ -73,23 +73,17 @@ async def ensure_container_objects(guild: discord.Guild, db, container: dict[str
     else:
         overwrites = permissions.build_private_overwrites(guild, owner, staff_role, bot_member, invite_members)
 
-    desired_category_name = (
-        f"suspended-{container.get('container_name') or owner.display_name}"[:100]
-        if container.get("status") == "suspended"
-        else container_category_name(container.get("container_name") or owner.display_name, emoji=emoji_categories)[:100]
-    )
-
     category = guild.get_channel(int(container["category_id"])) if container.get("category_id") else None
     if not isinstance(category, discord.CategoryChannel):
         category = await guild.create_category(
-            desired_category_name,
+            container_category_name(container.get("container_name") or owner.display_name, emoji=emoji_categories),
             overwrites=overwrites,
             reason="Dockerize repairing missing container category",
         )
         await db.update_container(guild.id, owner_id, category_id=category.id)
         container["category_id"] = str(category.id)
     else:
-        await category.edit(name=desired_category_name, overwrites=overwrites)
+        await category.edit(overwrites=overwrites)
 
     field_by_name = {
         "terminal": "terminal_channel_id",

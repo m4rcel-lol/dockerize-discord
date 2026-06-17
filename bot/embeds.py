@@ -4,11 +4,11 @@ import discord
 
 FOOTER_TEXT = "Dockerize Runtime • container-isolated Discord environment"
 
-GENERAL_COLOR = discord.Color.from_rgb(45, 186, 219)
-SUCCESS_COLOR = discord.Color.from_rgb(44, 201, 126)
-FAILURE_COLOR = discord.Color.from_rgb(237, 66, 69)
-WARNING_COLOR = discord.Color.from_rgb(255, 184, 77)
-SUSPENDED_COLOR = discord.Color.from_rgb(150, 24, 24)
+GENERAL_COLOR = discord.Color.from_str("#0091e2")
+SUCCESS_COLOR = discord.Color.from_str("#00e277")
+FAILURE_COLOR = discord.Color.from_str("#e20001")
+WARNING_COLOR = discord.Color.from_str("#b9b229")
+SUSPENDED_COLOR = discord.Color.from_str("#e20001")
 
 
 def _base_embed(title: str, description: str | None, color: discord.Color) -> discord.Embed:

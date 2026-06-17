@@ -274,20 +274,67 @@ class ContainersCog(commands.Cog):
             "$ docker compose down --volumes\n[+] Stopping container\n[+] Unmounting channels\n[+] Removing category\n[+] Cleaning database record",
         ]
         await interaction.response.defer(thinking=True)
+
+        # Start with the Docker emoji while the runtime is being dismantled,
+        # then swap to the failure emoji only on the final deletion embed.
+        try:
+            await interaction.edit_original_response(
+                embed=terminal_embed(self.bot.config.emoji_docker, "docker compose down --volumes", frames[0])
+            )
+        except discord.HTTPException:
+            pass
+
         category = guild.get_channel(int(container["category_id"])) if container.get("category_id") else None
         if isinstance(category, discord.CategoryChannel):
+            await asyncio.sleep(0.45)
+            try:
+                await interaction.edit_original_response(
+                    embed=terminal_embed(self.bot.config.emoji_docker, "docker compose down --volumes", frames[1])
+                )
+            except discord.HTTPException:
+                pass
+
             for channel in list(category.channels):
                 try:
                     await channel.delete(reason=f"Dockerize container deleted by {interaction.user}")
                 except discord.HTTPException:
                     pass
+
+            await asyncio.sleep(0.45)
+            try:
+                await interaction.edit_original_response(
+                    embed=terminal_embed(self.bot.config.emoji_docker, "docker compose down --volumes", frames[2])
+                )
+            except discord.HTTPException:
+                pass
+
             try:
                 await category.delete(reason=f"Dockerize container deleted by {interaction.user}")
             except discord.HTTPException:
                 pass
+        else:
+            await asyncio.sleep(0.45)
+            try:
+                await interaction.edit_original_response(
+                    embed=terminal_embed(self.bot.config.emoji_docker, "docker compose down --volumes", frames[2])
+                )
+            except discord.HTTPException:
+                pass
+
+        await asyncio.sleep(0.45)
+        try:
+            await interaction.edit_original_response(
+                embed=terminal_embed(self.bot.config.emoji_docker, "docker compose down --volumes", frames[3])
+            )
+        except discord.HTTPException:
+            pass
+
         await self.bot.db.delete_container_record(guild.id, interaction.user.id)
         final = failure_embed(self.bot.config.emoji_failure, "Container deleted", "Your Dockerize container and its mounted channels were removed.")
-        await play_terminal_animation(interaction, self.bot.config.emoji_failure, "docker compose down --volumes", frames, final, delay=0.55)
+        try:
+            await interaction.edit_original_response(embed=final)
+        except discord.HTTPException:
+            await interaction.followup.send(embed=final, ephemeral=True)
         await send_dm_safe(interaction.user, failure_embed(self.bot.config.emoji_failure, "Your Dockerize container was deleted", "Your container was manually deleted."))
         log.info("container deleted guild=%s owner=%s", guild.id, interaction.user.id)
 
