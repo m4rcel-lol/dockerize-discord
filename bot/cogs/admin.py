@@ -8,7 +8,7 @@ from discord.ext import commands
 
 from bot import permissions
 from bot.animations import play_terminal_animation
-from bot.checks import require_staff, send_dm_safe, short_container_id
+from bot.checks import container_category_name, require_staff, send_dm_safe, short_container_id
 from bot.embeds import console_block, docker_embed, failure_embed, success_embed, suspended_embed, warning_embed
 from bot.views import PaginationView
 from .common import ensure_container_objects, invited_members, owner_member, staff_role_for_guild
@@ -77,7 +77,7 @@ class AdminCog(commands.Cog):
             staff_role = await staff_role_for_guild(guild, self.bot.db)
             invites = await invited_members(guild, self.bot.db, user.id)
             await permissions.apply_container_suspended(category, guild, owner, staff_role, guild.me, invites)
-            await category.edit(name=f"suspended-{owner.display_name}"[:100], reason=f"Dockerize suspension by {interaction.user}")
+            await category.edit(name=f"suspended-{container['container_name']}"[:100], reason=f"Dockerize suspension by {interaction.user}")
         await self.bot.db.update_container(guild.id, user.id, status="suspended", suspended_reason=reason)
         frames = [
             f"$ docker container pause {container['container_name']}\n[!] Freezing permissions",
@@ -106,7 +106,7 @@ class AdminCog(commands.Cog):
         if isinstance(category, discord.CategoryChannel):
             owner = await owner_member(guild, user.id)
             if owner:
-                await category.edit(name=f"🐳 container-{owner.display_name}"[:100], reason=f"Dockerize unsuspension by {interaction.user}")
+                await category.edit(name=container_category_name(container["container_name"])[:100], reason=f"Dockerize unsuspension by {interaction.user}")
         await interaction.response.send_message(embed=success_embed(self.bot.config.emoji_success, "Container unsuspended", f"{user.mention}'s container is online again."))
         await send_dm_safe(user, success_embed(self.bot.config.emoji_success, "Your Dockerize container was unsuspended", "Your container access has been restored and the status is now `up`."))
 

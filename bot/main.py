@@ -10,6 +10,7 @@ from discord.ext import commands
 from .config import Config
 from .database import Database
 from .embeds import failure_embed
+from .emojis import resolve_bot_emoji_token
 
 LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
@@ -31,6 +32,7 @@ class DockerizeBot(commands.Bot):
         super().__init__(command_prefix=commands.when_mentioned, intents=intents, help_command=None)
         self.config = config
         self.db = Database(config.database_path)
+        self._emojis_resolved = False
 
     async def setup_hook(self) -> None:
         await self.db.connect()
@@ -41,7 +43,19 @@ class DockerizeBot(commands.Bot):
             synced = await self.tree.sync()
             log.info("synced %s slash commands", len(synced))
 
+    async def resolve_config_emojis(self) -> None:
+        """Resolve .env emoji names into real guild or application emoji mentions."""
+        if self._emojis_resolved:
+            return
+
+        self.config.emoji_docker = await resolve_bot_emoji_token(self, self.config.emoji_docker)
+        self.config.emoji_success = await resolve_bot_emoji_token(self, self.config.emoji_success)
+        self.config.emoji_failure = await resolve_bot_emoji_token(self, self.config.emoji_failure)
+        self.config.emoji_warning = await resolve_bot_emoji_token(self, self.config.emoji_warning)
+        self._emojis_resolved = True
+
     async def on_ready(self) -> None:
+        await self.resolve_config_emojis()
         log.info("Dockerize online as %s (%s)", self.user, self.user.id if self.user else "unknown")
         await self.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="docker compose up -d"))
 

@@ -23,8 +23,8 @@ def sanitize_name(value: str, *, default: str = "container", max_length: int = 3
     return cleaned[:max_length].strip("-_") or default
 
 
-def container_category_name(username: str, *, emoji: bool = True) -> str:
-    clean = sanitize_name(username, default="user", max_length=40)
+def container_category_name(container_name: str, *, emoji: bool = True) -> str:
+    clean = sanitize_name(container_name, default="container", max_length=40)
     return f"🐳 container-{clean}" if emoji else f"container-{clean}"
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import discord
@@ -17,7 +18,8 @@ from bot.checks import (
     send_dm_safe,
     short_container_id,
 )
-from bot.embeds import console_block, docker_embed, failure_embed, success_embed, warning_embed
+from bot.embeds import console_block, docker_embed, failure_embed, success_embed, terminal_embed, warning_embed
+from bot.views import ContainerInviteRequestView
 from .common import create_container_channels, ensure_container_objects, invited_members, mention_channel, owner_member, staff_role_for_guild
 
 log = logging.getLogger(__name__)
@@ -86,20 +88,50 @@ class ContainersCog(commands.Cog):
             overwrites = permissions.build_private_overwrites(guild, owner, staff_role, guild.me)
 
         frames = [
-            "$ docker compose up -d\n[+] Building Dockerize container...",
-            "$ docker compose up -d\n[+] Creating private namespace...\n[+] Mounting channels...",
-            "$ docker compose up -d\n[+] Creating private namespace...\n[+] Mounting channels...\n[+] Applying permission layers...",
-            "$ docker compose up -d\n[+] Creating private namespace...\n[+] Mounting channels...\n[+] Applying permission layers...\n[+] Container started successfully.",
+            "$ docker compose up -d\n[+] Pulling dockerize/runtime:latest\n[+] Preparing startup plan...",
+            "$ docker compose up -d\n[+] Pulling dockerize/runtime:latest\n[+] Creating private namespace...",
+            "$ docker compose up -d\n[+] Creating private namespace... done\n[+] Mounting channel volumes...",
+            "$ docker compose up -d\n[+] Creating private namespace... done\n[+] Mounting channel volumes... done\n[+] Applying permission layers...",
+            "$ docker compose up -d\n[+] Creating private namespace... done\n[+] Mounting channel volumes... done\n[+] Applying permission layers... done\n[+] Writing container metadata...",
+            "$ docker compose up -d\n[+] Creating private namespace... done\n[+] Mounting channel volumes... done\n[+] Applying permission layers... done\n[+] Container started successfully.",
         ]
 
-        await interaction.response.defer(thinking=True)
+        category: discord.CategoryChannel | None = None
+        terminal: discord.TextChannel | None = None
+        logs_ch: discord.TextChannel | None = None
+        general: discord.TextChannel | None = None
+        runtime: discord.VoiceChannel | None = None
+
+        async def edit_frame(index: int, delay: float = 0.55) -> None:
+            await interaction.edit_original_response(
+                embed=terminal_embed(self.bot.config.emoji_docker, "docker compose up -d", frames[index])
+            )
+            await asyncio.sleep(delay)
+
         try:
+            # Send the visible terminal immediately, before creating any Discord objects.
+            await interaction.response.send_message(embed=terminal_embed(self.bot.config.emoji_docker, "docker compose up -d", frames[0]))
+            await asyncio.sleep(0.55)
+
+            await edit_frame(1)
             category = await guild.create_category(
-                container_category_name(interaction.user.display_name),
+                container_category_name(container_name),
                 overwrites=overwrites,
                 reason=f"Dockerize container created by {interaction.user}",
             )
+
+            await edit_frame(2)
             terminal, logs_ch, general, runtime = await create_container_channels(guild, category)
+
+            await edit_frame(3)
+            # Category overwrites are inherited by the default channels, but re-applying
+            # keeps the sequence explicit and makes manual Discord weirdness harmless.
+            if visibility == "public":
+                await permissions.apply_container_public(category, guild, owner, staff_role, guild.me)
+            else:
+                await permissions.apply_container_private(category, guild, owner, staff_role, guild.me)
+
+            await edit_frame(4)
             await self.bot.db.create_container(
                 guild.id,
                 interaction.user.id,
@@ -114,12 +146,43 @@ class ContainersCog(commands.Cog):
             )
             for ch, ch_type in ((terminal, "text"), (logs_ch, "text"), (general, "text"), (runtime, "voice")):
                 await self.bot.db.add_container_channel(guild.id, interaction.user.id, ch.id, ch.name, ch_type, is_system=True)
+
+            await edit_frame(5, delay=0.35)
         except discord.Forbidden:
-            await interaction.edit_original_response(embed=failure_embed(self.bot.config.emoji_failure, "Container failed to start", "Discord rejected the permission layer. Move my role above managed roles and give me `Manage Channels`."))
+            log.exception("container creation forbidden")
+            if category is not None:
+                for channel in list(category.channels):
+                    try:
+                        await channel.delete(reason="Dockerize cleanup after failed container creation")
+                    except discord.HTTPException:
+                        pass
+                try:
+                    await category.delete(reason="Dockerize cleanup after failed container creation")
+                except discord.HTTPException:
+                    pass
+            failure = failure_embed(self.bot.config.emoji_failure, "Container failed to start", "Discord rejected the permission layer. Move my role above managed roles and give me `Manage Channels`.")
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embed=failure)
+            else:
+                await interaction.response.send_message(embed=failure, ephemeral=True)
             return
         except Exception as exc:  # noqa: BLE001
             log.exception("container creation failed")
-            await interaction.edit_original_response(embed=failure_embed(self.bot.config.emoji_failure, "Container failed to start", console_block(f"Error: {exc}")))
+            if category is not None:
+                for channel in list(category.channels):
+                    try:
+                        await channel.delete(reason="Dockerize cleanup after failed container creation")
+                    except discord.HTTPException:
+                        pass
+                try:
+                    await category.delete(reason="Dockerize cleanup after failed container creation")
+                except discord.HTTPException:
+                    pass
+            failure = failure_embed(self.bot.config.emoji_failure, "Container failed to start", console_block(f"Error: {exc}"))
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embed=failure)
+            else:
+                await interaction.response.send_message(embed=failure, ephemeral=True)
             return
 
         final = success_embed(
@@ -134,7 +197,7 @@ class ContainersCog(commands.Cog):
                 f"{terminal.mention}\n{logs_ch.mention}\n{general.mention}\n🔊 {runtime.mention}"
             ),
         )
-        await play_terminal_animation(interaction, self.bot.config.emoji_docker, "docker compose up -d", frames, final, delay=0.6)
+        await interaction.edit_original_response(embed=final)
         await send_dm_safe(
             interaction.user,
             docker_embed(self.bot.config.emoji_docker, "Your Dockerize container is online", "Your private container has been created and started."),
@@ -281,8 +344,8 @@ class ContainersCog(commands.Cog):
         await self.bot.db.update_container(guild.id, interaction.user.id, visibility=visibility)
         await interaction.response.send_message(embed=success_embed(self.bot.config.emoji_success, f"Container set {visibility}", f"Visibility is now `{visibility}`."))
 
-    @group.command(name="invite", description="Invite a user to your private container.")
-    async def invite(self, interaction: discord.Interaction, user: discord.User) -> None:
+    @group.command(name="invite", description="Send a container invite request to a user.")
+    async def invite(self, interaction: discord.Interaction, user: discord.Member) -> None:
         if not await require_configured_channel(interaction, self.bot.db, self.bot.config.emoji_failure, allow_inside_container=True):
             return
         assert interaction.guild is not None
@@ -300,18 +363,132 @@ class ContainersCog(commands.Cog):
         if container["status"] == "suspended":
             await interaction.response.send_message(embed=failure_embed(self.bot.config.emoji_failure, "Runtime suspended", "Suspended containers cannot accept invites."), ephemeral=True)
             return
-        await self.bot.db.add_invite(guild.id, interaction.user.id, user.id)
-        container = await ensure_container_objects(guild, self.bot.db, container)
-        await self._apply_visibility(guild, container, container["visibility"])
-        await interaction.response.send_message(embed=success_embed(self.bot.config.emoji_success, "Container invite added", f"{user.mention} can now access `{container['container_name']}`."), ephemeral=True)
-        await send_dm_safe(
-            user,
-            docker_embed(
-                self.bot.config.emoji_docker,
-                "You were invited to a Dockerize container",
-                f"{interaction.user.mention} invited you to access their container in **{guild.name}**.\n\nContainer: `{container['container_name']}`\nStatus: `{container['status']}`\nVisibility: `{container['visibility']}`",
+
+        accepted_invites = await self.bot.db.get_invites(guild.id, interaction.user.id)
+        if any(int(item["invited_user_id"]) == user.id for item in accepted_invites):
+            await interaction.response.send_message(embed=success_embed(self.bot.config.emoji_success, "User already mounted", f"{user.mention} already has access to `{container['container_name']}`."), ephemeral=True)
+            return
+
+        owner_pending_embed = docker_embed(
+            self.bot.config.emoji_docker,
+            "Container invite request sent",
+            (
+                f"An access request was sent to {user.mention}.\n\n"
+                f"Container: `{container['container_name']}`\n"
+                f"Status: `{container['status']}`\n"
+                "Access: `pending`\n\n"
+                "They do **not** have access yet. This embed will update when they accept or decline."
             ),
         )
+        await interaction.response.send_message(embed=owner_pending_embed, ephemeral=True)
+        owner_message = await interaction.original_response()
+
+        pending_invitee_embed = docker_embed(
+            self.bot.config.emoji_docker,
+            "Dockerize container invite request",
+            (
+                f"{interaction.user.mention} wants to invite you to their Dockerize container in **{guild.name}**.\n\n"
+                f"Container: `{container['container_name']}`\n"
+                f"Status: `{container['status']}`\n"
+                f"Visibility: `{container['visibility']}`\n\n"
+                "Accepting this request will mount your user permissions into the container. Declining will leave access unchanged."
+            ),
+        )
+        timeout_invitee_embed = warning_embed(
+            self.bot.config.emoji_warning,
+            "Container invite request expired",
+            f"The invite request for `{container['container_name']}` expired. No access was granted.",
+        )
+        timeout_owner_embed = warning_embed(
+            self.bot.config.emoji_warning,
+            "Container invite request expired",
+            f"{user.mention} did not respond to the request for `{container['container_name']}` in time. No access was granted.",
+        )
+
+        async def accept_callback(button_interaction: discord.Interaction) -> tuple[discord.Embed, discord.Embed]:
+            current_guild = self.bot.get_guild(guild.id)
+            if current_guild is None:
+                failure = failure_embed(self.bot.config.emoji_failure, "Invite failed", "I could not resolve the server for this invite request. No access was granted.")
+                return failure, failure
+
+            current_container = await self.bot.db.get_container(current_guild.id, interaction.user.id)
+            if not current_container:
+                failure = failure_embed(self.bot.config.emoji_failure, "Invite failed", "The container no longer exists. No access was granted.")
+                return failure, failure
+            if current_container["status"] == "suspended":
+                failure = failure_embed(self.bot.config.emoji_failure, "Invite failed", "The container is suspended. No access was granted.")
+                return failure, failure
+
+            try:
+                invited_member = current_guild.get_member(user.id) or await current_guild.fetch_member(user.id)
+            except discord.HTTPException:
+                failure = failure_embed(self.bot.config.emoji_failure, "Invite failed", "The invited user is no longer available in this server. No access was granted.")
+                return failure, failure
+
+            try:
+                await self.bot.db.add_invite(current_guild.id, interaction.user.id, invited_member.id)
+                current_container = await ensure_container_objects(current_guild, self.bot.db, current_container)
+                await self._apply_visibility(current_guild, current_container, current_container["visibility"])
+            except discord.Forbidden:
+                await self.bot.db.remove_invite(current_guild.id, interaction.user.id, invited_member.id)
+                failure = failure_embed(self.bot.config.emoji_failure, "Invite failed", "Discord rejected the permission update. No access was granted.")
+                return failure, failure
+            except Exception as exc:  # noqa: BLE001
+                await self.bot.db.remove_invite(current_guild.id, interaction.user.id, invited_member.id)
+                failure = failure_embed(self.bot.config.emoji_failure, "Invite failed", console_block(f"Error: {exc}"))
+                return failure, failure
+
+            invitee_embed = success_embed(
+                self.bot.config.emoji_success,
+                "Container invite accepted",
+                (
+                    f"You accepted {interaction.user.mention}'s Dockerize container invite.\n\n"
+                    f"Container: `{current_container['container_name']}`\n"
+                    "Access: `granted`"
+                ),
+            )
+            owner_embed = success_embed(
+                self.bot.config.emoji_success,
+                "Container invite accepted",
+                (
+                    f"{invited_member.mention} accepted the request and can now access `{current_container['container_name']}`.\n\n"
+                    "Access: `granted`"
+                ),
+            )
+            return invitee_embed, owner_embed
+
+        async def decline_callback(button_interaction: discord.Interaction) -> tuple[discord.Embed, discord.Embed]:
+            invitee_embed = warning_embed(
+                self.bot.config.emoji_warning,
+                "Container invite declined",
+                f"You declined the request for `{container['container_name']}`. No access was granted.",
+            )
+            owner_embed = warning_embed(
+                self.bot.config.emoji_warning,
+                "Container invite declined",
+                f"{user.mention} declined the request for `{container['container_name']}`. No access was granted.",
+            )
+            return invitee_embed, owner_embed
+
+        view = ContainerInviteRequestView(
+            invited_user_id=user.id,
+            owner_message=owner_message,
+            pending_invitee_embed=pending_invitee_embed,
+            timeout_invitee_embed=timeout_invitee_embed,
+            timeout_owner_embed=timeout_owner_embed,
+            accept_callback=accept_callback,
+            decline_callback=decline_callback,
+        )
+
+        try:
+            view.invite_message = await user.send(embed=pending_invitee_embed, view=view)
+        except (discord.Forbidden, discord.HTTPException):
+            failed = failure_embed(
+                self.bot.config.emoji_failure,
+                "Invite request failed",
+                f"I could not DM {user.mention}, so no request was delivered and no access was granted.",
+            )
+            await interaction.edit_original_response(embed=failed)
 
     @group.command(name="uninvite", description="Remove a user's access to your private container.")
     async def uninvite(self, interaction: discord.Interaction, user: discord.User) -> None:

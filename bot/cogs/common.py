@@ -26,7 +26,13 @@ async def invited_members(guild: discord.Guild, db, owner_id: int) -> list[disco
     invited = await db.get_invites(guild.id, owner_id)
     members: list[discord.Member] = []
     for item in invited:
-        member = guild.get_member(int(item["invited_user_id"]))
+        user_id = int(item["invited_user_id"])
+        member = guild.get_member(user_id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(user_id)
+            except discord.HTTPException:
+                member = None
         if member:
             members.append(member)
     return members
@@ -67,17 +73,23 @@ async def ensure_container_objects(guild: discord.Guild, db, container: dict[str
     else:
         overwrites = permissions.build_private_overwrites(guild, owner, staff_role, bot_member, invite_members)
 
+    desired_category_name = (
+        f"suspended-{container.get('container_name') or owner.display_name}"[:100]
+        if container.get("status") == "suspended"
+        else container_category_name(container.get("container_name") or owner.display_name, emoji=emoji_categories)[:100]
+    )
+
     category = guild.get_channel(int(container["category_id"])) if container.get("category_id") else None
     if not isinstance(category, discord.CategoryChannel):
         category = await guild.create_category(
-            container_category_name(owner.display_name, emoji=emoji_categories),
+            desired_category_name,
             overwrites=overwrites,
             reason="Dockerize repairing missing container category",
         )
         await db.update_container(guild.id, owner_id, category_id=category.id)
         container["category_id"] = str(category.id)
     else:
-        await category.edit(overwrites=overwrites)
+        await category.edit(name=desired_category_name, overwrites=overwrites)
 
     field_by_name = {
         "terminal": "terminal_channel_id",

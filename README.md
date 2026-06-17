@@ -6,9 +6,9 @@ Dockerize is a production-style Discord bot that turns a Discord server into a c
 
 - Slash-command-only Discord bot
 - One personal container per user per guild
-- Private category with `terminal`, `logs`, `general`, and `runtime`
+- Private category named `🐳 container-<container-name>` with `terminal`, `logs`, `general`, and `runtime`
 - Public/private visibility modes
-- Invite and uninvite system
+- Invite request system with Accept/Decline buttons
 - Channel creation/deletion inside containers
 - Admin inspection, suspension, force delete, and force visibility controls
 - SQLite persistence with `aiosqlite`
@@ -161,11 +161,13 @@ Normal users must use Dockerize commands in the configured command channel, or i
 /channel create name:projects type:text
 ```
 
-4. User invites a friend:
+4. User sends an invite request to a friend:
 
 ```txt
 /container invite user:@friend
 ```
+
+The friend receives a DM with **Accept** and **Decline** buttons. Access is only granted after they accept. The owner embed starts as `pending` and updates to accepted, declined, expired, or failed.
 
 5. Staff checks a container:
 
@@ -181,7 +183,7 @@ Normal users must use Dockerize commands in the configured command channel, or i
 
 ## Custom Emoji Configuration
 
-Custom emojis have different IDs in every server, so Dockerize reads emoji strings from `.env`:
+Dockerize reads emoji strings from `.env`:
 
 ```env
 EMOJI_DOCKER=:docker:
@@ -190,13 +192,43 @@ EMOJI_FAILURE=:failure:
 EMOJI_WARNING=:warning:
 ```
 
-You can also paste full custom emoji markup:
+You can use any of these formats:
 
 ```env
-EMOJI_DOCKER=<:docker:123456789012345678>
+EMOJI_SUCCESS=:success:
+EMOJI_SUCCESS=success
+EMOJI_SUCCESS=<:success:123456789012345678>
 ```
 
-If a custom emoji does not render, the bot still works and shows the raw text.
+On startup, Dockerize resolves names in this order:
+
+1. Bot/application emojis uploaded in the Discord Developer Portal
+2. Guild custom emojis available to the bot
+3. Raw fallback text, if no matching emoji exists
+
+This matters because emojis uploaded to the bot/application are **application emojis**, not normal guild emojis. Dockerize explicitly fetches application emojis so `:docker:` can render even when the emoji was added to the bot itself.
+
+If an emoji still renders as raw text:
+
+- Make sure the `.env` name exactly matches the emoji name.
+- Rebuild/restart after changing `.env`.
+- Paste the full emoji mention into `.env` as a fallback.
+- Give the bot **Use External Emojis** if you are using guild emojis from another server.
+
+## Invite Requests
+
+`/container invite user:@user` does not instantly grant access anymore. It sends a request first.
+
+Flow:
+
+1. Owner runs `/container invite user:@friend`.
+2. Owner gets an embed saying the request is `pending`.
+3. Friend gets a DM with **Accept** and **Decline** buttons.
+4. If they accept, Dockerize stores the invite in SQLite and applies category/channel permissions.
+5. If they decline or the request expires, no database invite is stored and no access is granted.
+6. The owner embed updates to accepted, declined, expired, or failed when possible.
+
+Invite requests expire after 15 minutes.
 
 ## Troubleshooting
 
